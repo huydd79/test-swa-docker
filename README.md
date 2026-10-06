@@ -254,6 +254,9 @@ Expected test matrix (`55-full-test.sh`):
   was stopped longer than the JWT lifetime, `51-lab-start.sh` mints a new one first.
 - **Host gateway**: auto-detected (Docker `bridge` gateway, else podman network gateway); set `HOST_GW` to override.
 - **Secret permissions** are granted per variable with `!permit` in `SAFE_POLICY`, not via the safe's consumers group.
+- **Several lab hosts on one tenant**: set a different `LAB_ID` in each host's `config.env` (e.g. `lab2`).
+  Trust domains become `prod.lab2.swa.<BASE_DOMAIN>` and workload authenticators `authn-jwt/swa-prod-lab2`, so
+  setup, tests and cleanup on one host never touch the other. Leave it empty for a single lab.
 - **Move the lab to another host**: copy this directory (without `state/`, `.token`, `config.env`), extract the bundle,
   create `config.env` and follow section 5. The client is rebuilt from source, so its hash may differ — the policy
   always uses the hash of the binary just built.

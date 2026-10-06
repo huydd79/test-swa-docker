@@ -8,5 +8,5 @@ for e in ${1:-$ENVS}; do
   env_load "$e"
   [ "$(docker inspect -f '{{.State.Status}}' "$WL" 2>/dev/null)" = running ] || die "$WL is not running -> ./51-lab-start.sh $ENV"
   echo; echo "################ $ENV : $WL as $SA_USER ################"
-  docker exec $TTY --user "$SA_USER" -e SM_URL="$SWA_API_BASE/api" -e SHOW="${SHOW:-0}" -e SHOW_JWT="${SHOW_JWT:-0}" "$WL" swa-test.sh $SECRETS || true
+  docker exec $TTY --user "$SA_USER" -e SM_URL="$SWA_API_BASE/api" -e AUTHN="$AUTHN" -e SHOW="${SHOW:-0}" -e SHOW_JWT="${SHOW_JWT:-0}" "$WL" swa-test.sh $SECRETS || true
 done
