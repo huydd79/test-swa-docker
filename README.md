@@ -216,40 +216,44 @@ Runtime data lives in `state/<env>/` (CA, signing key, server config, tokens, ag
 
 ## 5. Build the lab
 
-```bash
-# 1. Configure
-cp config.env.example config.env && chmod 600 config.env
-vi config.env                         # fill every <placeholder> in the EDIT sections
+### 5.1 Prepare (interactive, once per host)
 
-# 2. Check the host (fix every MISS, nothing is installed for you)
+Steps 1-3 need your input (editing, password, MFA), so run them one by one:
+
+```bash
+# 1. Configure: fill every <placeholder> in the EDIT sections (set LAB_ID if another lab host uses the same tenant)
+cp config.env.example config.env && chmod 600 config.env
+vi config.env
+
+# 2. Check the host: fix every MISS and rerun until "All required items OK" (nothing is installed for you)
 ./00-check-prereq.sh
 
-# 3. Log in
-./01-get-token.sh                     # admin token -> ./.token (re-run when it expires)
-conjur login                          # conjur CLI, used by 40/99 for policy loads
-
-# 4. Tenant objects (builds swa-go-test first if needed; pins its sha256 in the policy)
-./10-tenant-setup.sh prod
-./10-tenant-setup.sh dev
-
-# 5. SWA Servers + JWT refresh timer
-./20-server-run.sh prod
-./20-server-run.sh dev
-./21-token-timer.sh
-
-# 6. Workload image and containers
-./30-build-image.sh
-./31-workload-run.sh prod
-./31-workload-run.sh dev
-
-# 7. Authorise the workloads on their own secrets
-./40-grant.sh prod
-./40-grant.sh dev
-
-# 8. Verify
-./53-lab-status.sh
-./55-full-test.sh
+# 3. Log in (admin user + MFA)
+conjur init                           # first time only: Secrets Manager SaaS, https://<subdomain>.secretsmgr.cyberark.cloud
+conjur login                          # conjur CLI session, used by 10/40/99 for policy loads
+./01-get-token.sh                     # admin API token -> ./.token (short-lived: run it right before 5.2)
 ```
+
+### 5.2 Deploy and verify (copy and paste)
+
+Non-interactive; the whole block runs in a few minutes (the first run also pulls `golang` and `alpine`).
+It stops at the first failing step — fix it, then paste the block again (every step is safe to rerun).
+
+```bash
+./10-tenant-setup.sh prod && ./10-tenant-setup.sh dev \
+&& ./20-server-run.sh prod && ./20-server-run.sh dev && ./21-token-timer.sh \
+&& ./30-build-image.sh && ./31-workload-run.sh prod && ./31-workload-run.sh dev \
+&& ./40-grant.sh prod && ./40-grant.sh dev \
+&& ./53-lab-status.sh && ./55-full-test.sh
+```
+
+| Step | What it does |
+|---|---|
+| `10-tenant-setup.sh <env>` | Tenant objects: CA, trust domain, server group, server component, node group (pins the `swa-go-test` sha256, building it first if needed), `authn-jwt/swa-<env>` |
+| `20-server-run.sh <env>`, `21-token-timer.sh` | SWA Server containers + JWT refresh timer |
+| `30-build-image.sh`, `31-workload-run.sh <env>` | Workload image, agent certificate and workload containers |
+| `40-grant.sh <env>` | Workload host annotation, group `apps`, permissions on the environment's own secrets |
+| `53-lab-status.sh`, `55-full-test.sh` | Verify: every environment gets a JWT-SVID and an access token; matrix shows 8/8 PASS |
 
 ## 6. Run the demo
 
