@@ -9,7 +9,12 @@ cd "$(dirname "$0")"
 source config.env
 : "${IDENTITY_URL:?set IDENTITY_URL in config.env}" "${SWA_API_BASE:?set SWA_API_BASE in config.env}"
 SM_USER="${SM_USER:-}"
-[ -n "$SM_USER" ] || read -r -p "Identity user: " SM_USER
+echo "Identity tenant: $IDENTITY_URL"
+if [ -t 0 ]; then   # interactive: always show the user; Enter keeps the SM_USER default from config.env
+  read -r -p "Identity user${SM_USER:+ [$SM_USER]}: " U; SM_USER="${U:-$SM_USER}"
+else
+  echo "Identity user: $SM_USER"
+fi
 [ -n "$SM_USER" ] || { echo "no user" >&2; exit 1; }
 
 J() { python3 -c "import sys,json;d=json.load(sys.stdin);$1"; }
