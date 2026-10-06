@@ -12,6 +12,7 @@ cat > /etc/systemd/system/swa-lab-token@.timer <<UNIT
 [Unit]
 Description=Refresh JWT swa-server-%i every 30m
 [Timer]
+OnActiveSec=1min
 OnBootSec=1min
 OnUnitActiveSec=30min
 Persistent=true
@@ -19,5 +20,6 @@ Persistent=true
 WantedBy=timers.target
 UNIT
 systemctl daemon-reload
-for e in $ENVS; do systemctl enable --now "swa-lab-token@$e.timer"; done
+# restart (not just enable): re-arms OnActiveSec so the timer always has a next run, even when this script is rerun
+for e in $ENVS; do systemctl enable -q "swa-lab-token@$e.timer"; systemctl restart "swa-lab-token@$e.timer"; done
 systemctl list-timers 'swa-lab-token@*' --no-pager | head -4

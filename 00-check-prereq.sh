@@ -15,6 +15,9 @@ tool(){ # tool <cmd> <install hint>
 echo "== Config"
 if grep -qE '^[A-Z_]+="[^"]*<[a-z-]+>' config.env; then printf "  MISS  %-28s %s\n" "config.env" "placeholders left: $(grep -oE '^[A-Z_]+="[^"]*<[a-z-]+>' config.env | cut -d= -f1 | tr '\n' ' ')"; MISS=1
 else printf "  OK    %-28s %s\n" "config.env" "tenant $SWA_API_BASE, domain $BASE_DOMAIN"; fi
+for e in $ENVS; do env_load "$e" 2>/dev/null || continue
+  [[ $TD =~ ^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$ ]] && ok "trust domain $e" "$TD" \
+    || bad "trust domain $e" "'$TD' invalid -> fix BASE_DOMAIN / LAB_ID (lowercase letters, digits, . - _)"; done
 echo "== Host"
 [ "$(id -u)" = 0 ] && ok "root" "required (docker daemon / rootful podman, systemd units in /etc)" || bad "root" "run as root (sudo -i)"
 command -v systemctl >/dev/null && ok "systemd" "$(systemctl --version | head -1)" || bad "systemd" "token refresh timer needs systemd"

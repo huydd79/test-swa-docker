@@ -3,6 +3,10 @@ set -euo pipefail
 cd "$(dirname "$0")"
 [ -f ./config.env ] || { echo "ERROR: config.env missing -> cp config.env.example config.env and edit it" >&2; exit 1; }
 source ./config.env
+# Wrap env_load from config.env: stop early on names the tenant/agent would reject (e.g. a typo in BASE_DOMAIN / LAB_ID)
+eval "_cfg_env_load() $(declare -f env_load | tail -n +2)"
+env_load(){ _cfg_env_load "$@" || exit 1
+  [[ $TD =~ ^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$ ]] || die "invalid trust domain '$TD' -> check BASE_DOMAIN / LAB_ID in config.env (lowercase letters, digits, . - _)"; }
 die(){ echo "ERROR: $*" >&2; exit 1; }
 # api METHOD PATH [JSON] -> sets BODY and CODE
 api(){
