@@ -1,0 +1,7 @@
+config.env
+.token
+state/
+image/swa-agent
+image/swa-go-test
+swa-go-test/swa-go-test
+working.md
