@@ -137,14 +137,52 @@ attested node.
 
 ## 3. Prerequisites
 
-- Linux host, **root**, systemd, `docker` (or podman + podman-docker), `curl`, `jq`, `openssl`, `python3`,
-  GNU `coreutils`/`date`, CyberArk `conjur` CLI.
+The lab needs three things from CyberArk / Idira plus a Linux host. `./00-check-prereq.sh` verifies all of them
+(it reports only and never installs anything).
+
+### 3.1 Idira tenant with Secrets Manager
+
+- An Idira (CyberArk Identity Security Platform) tenant with **Secrets Manager SaaS** and **Secure Workload Access**
+  enabled: `https://<subdomain>.secretsmgr.cyberark.cloud` and its Identity tenant `https://<tenant-id>.id.cyberark.cloud`.
+- An admin user (Identity login with MFA) who can manage SWA trust domains / server groups / node groups and load
+  Secrets Manager policies (e.g. member of the Secrets Manager admin group).
+- A safe synced to Secrets Manager (`data/vault/<safe>`) holding the test accounts used as prod and dev secrets
+  (`<account>/username`, `<account>/password`). Use test accounts only — the demo can print their values.
+- Set `SWA_API_BASE`, `IDENTITY_URL`, `SM_USER`, `SAFE_POLICY`, `PROD_SECRETS`, `DEV_SECRETS` in `config.env`.
+
+### 3.2 Secrets Manager CLI (`conjur`)
+
+- Install the Idira Secrets Manager CLI (`conjur`, v9.x) from the CyberArk / Idira download portal, e.g.
+  `install -m 0755 conjur /usr/local/bin/conjur`.
+- Initialise it for the SaaS tenant and log in (used by `10`, `40`, `99` for policy loads):
+
+  ```bash
+  conjur init      # Secrets Manager SaaS, URL https://<subdomain>.secretsmgr.cyberark.cloud
+  conjur login     # admin user + MFA
+  conjur whoami
+  ```
+
+### 3.3 SWA release bundle
+
+- Download `swa-release-v<ver>.tgz` (this lab is tested with **1.1.4**) from the CyberArk / Idira download portal
+  and extract it to `SWA_BUNDLE_DIR` (default `/opt/download/swa`):
+
+  ```bash
+  mkdir -p /opt/download/swa
+  tar -xzf swa-release-v1.1.4.tgz -C /opt/download/swa
+  ```
+
+- The scripts take everything from there:
+  `binaries/swa-agent_<ver>_linux_amd64/swa-agent` (copied into the workload image) and
+  `container-images/swa-server-<ver>-amd64.tar` (loaded with `docker load`).
+  The image `docker.io/library/swa-server` is **not** on Docker Hub; containers always run with `--pull=never`.
+
+### 3.4 Lab host
+
+- Linux x86_64, **root**, systemd, `docker` (Docker Engine, or podman + podman-docker), `curl`, `jq`, `openssl`,
+  `python3`, GNU `coreutils`/`date`, `git`. Tested on RHEL 9 (podman 4.6) and Ubuntu 24.04 (Docker 29).
 - Outbound HTTPS to the tenant (`*.secretsmgr.cyberark.cloud`, `*.id.cyberark.cloud`) and to `docker.io`
-  (base images `alpine`, `golang`).
-- SWA release bundle extracted to `SWA_BUNDLE_DIR` (default `/opt/download/swa`):
-  `binaries/swa-agent_<ver>_linux_amd64/swa-agent` and `container-images/swa-server-<ver>-amd64.tar`.
-  The image `docker.io/library/swa-server` is **not** on Docker Hub; scripts load it from the tar and run with `--pull=never`.
-- Tenant admin able to manage SWA and policies; a safe already synced to Secrets Manager with the test accounts.
+  (base images `alpine:3.20`, `golang:1.24`).
 - Firewall: containers must reach the server ports on the host gateway (with firewalld put `docker0`/`podman0`
   in the `trusted` or `docker` zone). Ports 18443/18543 do not need to be open in the public zone.
 
