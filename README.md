@@ -184,7 +184,8 @@ The lab needs three things from CyberArk / Idira plus a Linux host. `./00-check-
 - Outbound HTTPS to the tenant (`*.secretsmgr.cyberark.cloud`, `*.id.cyberark.cloud`) and to `docker.io`
   (base images `alpine:3.20`, `golang:1.24`).
 - Firewall: containers must reach the server ports on the host gateway (with firewalld put `docker0`/`podman0`
-  in the `trusted` or `docker` zone). Ports 18443/18543 do not need to be open in the public zone.
+  in the `trusted` or `docker` zone; with UFW on Ubuntu run
+  `ufw allow in on docker0 to any port 18443,18543 proto tcp`). Ports 18443/18543 do not need to be open to the outside.
 
 ## 4. Files
 

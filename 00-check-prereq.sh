@@ -64,10 +64,18 @@ if command -v firewall-cmd >/dev/null && firewall-cmd --state >/dev/null 2>&1; t
       *) warn "$i firewalld zone" "'$z' - containers may lose egress / host ports; fix: firewall-cmd --permanent --zone=trusted --change-interface=$i && firewall-cmd --reload";; esac
   done
 fi
+if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then   # Ubuntu: UFW drops container -> host ports
+  for i in docker0 podman0; do
+    ip link show "$i" >/dev/null 2>&1 || continue
+    ufw status 2>/dev/null | grep -qE "18443,18543/tcp on $i +ALLOW" && ok "$i ufw" "18443,18543/tcp allowed" \
+      || bad "$i ufw" "agents cannot reach the servers; fix: ufw allow in on $i to any port 18443,18543 proto tcp"
+  done
+fi
 for p in 18443 18543 18080 18180; do ss -ltnH "sport = :$p" 2>/dev/null | grep -q . && warn "port $p" "already in use (ok if the lab is running)" ; done
 
 echo "== Credentials"
-if command -v conjur >/dev/null; then conjur whoami >/dev/null 2>&1 && ok "conjur login" "$(conjur whoami 2>/dev/null | jq -r .username 2>/dev/null)" || warn "conjur login" "run: conjur login -i <user>  (needed by 10, 40, 99)"; fi
+if command -v conjur >/dev/null && [ ! -s "$HOME/.conjurrc" ]; then warn "conjur init" "~/.conjurrc missing -> conjur init (Secrets Manager SaaS, ${SWA_API_BASE}), then conjur login"
+elif command -v conjur >/dev/null; then conjur whoami >/dev/null 2>&1 && ok "conjur login" "$(conjur whoami 2>/dev/null | jq -r .username 2>/dev/null)" || warn "conjur login" "run: conjur login -i <user>  (needed by 10, 40, 99)"; fi
 if [ -s "$ADMIN_TOKEN_FILE" ]; then
   c=$(curl -s -o /dev/null -m 10 -w '%{http_code}' -H "Authorization: Token token=\"$(tr -d '\n' < "$ADMIN_TOKEN_FILE")\"" -H 'Accept: application/x.secretsmgr.v2+json' "$SWA_API_BASE/api/swa/trust-domains")
   [ "$c" = 200 ] && ok "admin token (.token)" "valid" || warn "admin token (.token)" "HTTP $c -> ./01-get-token.sh"
