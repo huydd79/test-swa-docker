@@ -5,6 +5,8 @@ CyberArk Secrets Manager SaaS tenant. Two isolated environments (`prod`, `dev`) 
 SPIFFE **JWT-SVID** without holding any secret, exchanges it for a Secrets Manager access token, and reads only
 the secrets of its own environment.
 
+How SWA works (components and the four flows): **https://huydd79.github.io/test-swa-docker/**
+
 | | |
 |---|---|
 | Author / contact | Huy Do — [hdo@paloaltonetworks.com](mailto:hdo@paloaltonetworks.com) |
