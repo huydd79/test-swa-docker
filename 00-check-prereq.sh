@@ -19,8 +19,8 @@ for e in $ENVS; do env_load "$e" 2>/dev/null || continue
   [[ $TD =~ ^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$ ]] && ok "trust domain $e" "$TD" \
     || bad "trust domain $e" "'$TD' invalid -> fix BASE_DOMAIN / LAB_ID (lowercase letters, digits, . - _)"; done
 echo "== Host"
-[ "$(id -u)" = 0 ] && ok "root" "required (docker daemon / rootful podman, systemd units in /etc)" || bad "root" "run as root (sudo -i)"
-command -v systemctl >/dev/null && ok "systemd" "$(systemctl --version | head -1)" || bad "systemd" "token refresh timer needs systemd"
+if [ "$(uname -s)" = Darwin ]; then ok "macOS" "$(sw_vers -productVersion) $(uname -m) - Docker Desktop (no root needed)"
+else ok "Linux" "$(uname -r) $(uname -m) - user must be able to run docker (root or docker group); k3s runs --privileged"; fi
 
 echo "== Tools"
 tool bash      "dnf install bash"
@@ -28,11 +28,12 @@ tool curl      "dnf install curl"
 tool jq        "dnf install jq"
 tool openssl   "dnf install openssl"
 tool python3   "dnf install python3   (01-get-token.sh, JWKS build in 10-tenant-setup.sh)"
-tool docker    "Docker Engine (docker-ce) or podman + podman-docker"
-docker info >/dev/null 2>&1 && ok "docker engine" "$(docker --version 2>/dev/null)" || bad "docker engine" "docker info failed -> start the daemon: systemctl enable --now docker"
+tool docker    "Docker Engine (docker-ce) / Docker Desktop, or podman + podman-docker"
+tool kubectl   "https://kubernetes.io/docs/tasks/tools/ (macOS: brew install kubectl)"
+tool helm      "https://helm.sh/docs/intro/install/ (macOS: brew install helm)"
+docker info >/dev/null 2>&1 && ok "docker engine" "$(docker --version 2>/dev/null)" || bad "docker engine" "docker info failed -> start the daemon: systemctl enable --now docker (macOS: open -a Docker)"
 tool conjur    "Secrets Manager CLI (conjur) from the CyberArk/Idira download page, then: conjur init + conjur login"
-for c in sha256sum base64 mktemp shred sed grep; do tool "$c" "dnf install coreutils grep sed"; done
-date -d @0 +%s >/dev/null 2>&1 && ok "date -d (GNU)" "" || bad "date -d (GNU)" "dnf install coreutils"
+for c in sha256sum base64 mktemp sed grep; do tool "$c" "dnf install coreutils grep sed"; done
 
 echo "== SWA release bundle ($SWA_BUNDLE_DIR)"
 HINT="mkdir -p $SWA_BUNDLE_DIR && tar -xzf swa-release-v$SWA_VERSION.tgz -C $SWA_BUNDLE_DIR"
@@ -49,16 +50,20 @@ fi
 echo "== Lab inputs"
 [ -f swa-go-test/main.go ] && ok "swa-go-test source" "./swa-go-test (main.go, go.mod, go.sum)" || bad "swa-go-test source" "./swa-go-test/main.go missing"
 [ -x "$SWA_CLIENT_BIN" ] && ok "swa-go-test binary" "built ($(sha256sum "$SWA_CLIENT_BIN" | cut -c1-12)...)" || warn "swa-go-test binary" "not built yet -> built automatically by 10/30 (needs docker.io/library/golang:1.24)"
+[ -f "$SWA_SERVER_CHART" ] && ok "swa-server helm chart" "${SWA_SERVER_CHART#$SWA_BUNDLE_DIR/}" || bad "swa-server helm chart" "$SWA_SERVER_CHART missing"
 if command -v docker >/dev/null; then
-  docker image inspect "$SWA_SERVER_IMAGE" >/dev/null 2>&1 && ok "swa-server image" "$SWA_SERVER_IMAGE (loaded)" \
-    || warn "swa-server image" "not loaded yet -> 20-server-run.sh loads it from the bundle tar (never pulled)"
+  if [ "$(docker inspect -f '{{.State.Running}}' "$K3S_NAME" 2>/dev/null)" = true ]; then
+    ok "k3s container" "$K3S_NAME running ($(docker inspect -f '{{.Config.Image}}' "$K3S_NAME"))"
+    docker exec "$K3S_NAME" crictl inspecti "$SWA_SERVER_IMAGE" >/dev/null 2>&1 && ok "swa-server image (k3s)" "$SWA_SERVER_IMAGE" \
+      || warn "swa-server image (k3s)" "not imported yet -> 05-k3s-up.sh imports it from the bundle tar (never pulled)"
+  else warn "k3s container" "$K3S_NAME not running -> ./05-k3s-up.sh (pulls $K3S_IMAGE)"; fi
   docker image inspect "$WL_IMAGE" >/dev/null 2>&1 && ok "workload image" "$WL_IMAGE" || warn "workload image" "not built yet -> ./30-build-image.sh (needs docker.io/library/alpine:3.20)"
 fi
 
 echo "== Network / firewall"
 c=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "$SWA_API_BASE/api/info" 2>/dev/null); [[ "$c" =~ ^(200|401)$ ]] \
   && ok "tenant reachable" "$SWA_API_BASE (HTTP $c)" || bad "tenant reachable" "$SWA_API_BASE -> HTTP ${c:-none} (proxy/DNS/firewall?)"
-curl -s -o /dev/null -m 10 https://registry-1.docker.io/v2/ && ok "docker.io reachable" "(only for 30-build-image.sh)" || warn "docker.io reachable" "needed only to pull alpine for 30-build-image.sh"
+curl -s -o /dev/null -m 10 https://registry-1.docker.io/v2/ && ok "docker.io reachable" "(k3s, busybox, alpine, golang images)" || warn "docker.io reachable" "needed to pull k3s/busybox/alpine/golang images"
 if command -v firewall-cmd >/dev/null && firewall-cmd --state >/dev/null 2>&1; then
   for i in docker0 podman0; do
     ip link show "$i" >/dev/null 2>&1 || continue
@@ -71,10 +76,12 @@ if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active
   for i in docker0 podman0; do
     ip link show "$i" >/dev/null 2>&1 || continue
     ufw status 2>/dev/null | grep -qE "18443,18543/tcp on $i +ALLOW" && ok "$i ufw" "18443,18543/tcp allowed" \
-      || bad "$i ufw" "agents cannot reach the servers; fix: ufw allow in on $i to any port 18443,18543 proto tcp"
+      || warn "$i ufw" "agents may not reach the servers; fix: ufw allow in on $i to any port 18443,18543 proto tcp"
   done
 fi
-for p in 18443 18543 18080 18180; do ss -ltnH "sport = :$p" 2>/dev/null | grep -q . && warn "port $p" "already in use (ok if the lab is running)" ; done
+listening(){ ss -ltnH "sport = :$1" 2>/dev/null | grep -q . || lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
+PORTS="$K3S_API_PORT"; for e in $ENVS; do env_load "$e" 2>/dev/null && PORTS+=" $API_PORT"; done
+for p in $PORTS; do listening "$p" && warn "port $p" "already in use (ok if $K3S_NAME is running)" ; done
 
 echo "== Credentials"
 if command -v conjur >/dev/null && [ ! -s "$HOME/.conjurrc" ]; then warn "conjur init" "~/.conjurrc missing -> conjur init (Secrets Manager SaaS, ${SWA_API_BASE}), then conjur login"

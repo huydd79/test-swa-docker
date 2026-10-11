@@ -1,9 +1,9 @@
 #!/bin/bash
 # 10-tenant-setup.sh <prod|dev> - Build the tenant side for one environment (idempotent):
-#   x509pop CA -> trust domain -> server group -> server JWT signing key + server component registration -> node group (policy) -> workload authn-jwt
+#   x509pop CA -> trust domain -> server group -> server component (k3s service-account JWKS) -> node group (policy) -> workload authn-jwt
 source "$(dirname "$0")/lib.sh"
-env_load "${1:?prod|dev}"; need_conjur
-umask 077; mkdir -p "$ST/pki" "$ST/signer"
+env_load "${1:?prod|dev}"; need_conjur; need_k3s
+umask 077; mkdir -p "$ST/pki"
 
 echo "[1] CA x509pop ($ST/pki)"
 [ -f "$ST/pki/ca.key" ] || openssl req -x509 -newkey rsa:4096 -sha256 -days 365 -nodes -keyout "$ST/pki/ca.key" -out "$ST/pki/ca.crt" \
@@ -15,25 +15,22 @@ api POST /trust-domains "$(jq -nc --arg n "$TD" '{name:$n, jwt:{signing_key_type
 echo "[3] Server group $SG"
 api POST "/trust-domains/$TD/server-groups" "$(jq -nc --arg n "$SG" --rawfile ca "$ST/pki/ca.crt" '{name:$n, attestation:{x509pop:{ca_certificates:$ca}}}')"; ok_or_exists
 
-echo "[4] Server JWT signing key + register server component $SERVER"
-if [ ! -f "$ST/signer/jwt.key" ]; then
-  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$ST/signer/jwt.key" 2>/dev/null
-  python3 - "$ST/signer" <<'PY'
-import subprocess, base64, json, hashlib, sys
-d=sys.argv[1]; k=d+"/jwt.key"
-der=subprocess.run(["openssl","rsa","-in",k,"-pubout","-outform","DER"],capture_output=True,check=True).stdout
-mod=subprocess.run(["openssl","rsa","-in",k,"-noout","-modulus"],capture_output=True,check=True,text=True).stdout.strip().split("=")[1]
-b64=lambda b: base64.urlsafe_b64encode(b).rstrip(b"=").decode(); kid=hashlib.sha256(der).hexdigest()[:16]
-json.dump({"keys":[{"kty":"RSA","use":"sig","alg":"RS256","kid":kid,"n":b64(bytes.fromhex(mod)),"e":b64((65537).to_bytes(3,"big"))}]},open(d+"/jwks.json","w"))
-open(d+"/kid","w").write(kid)
-PY
+echo "[4] Register server component $SERVER (k3s SA token: sub $JWT_SUB)"
+# The tenant cannot reach the k3s API, so the JWKS is registered inline (public_keys) instead of a jwks_uri.
+ISS=$(kubectl get --raw /.well-known/openid-configuration | jq -r .issuer)
+JWKS=$(kubectl get --raw /openid/v1/jwks | jq -cS .)
+[ -n "$ISS" ] && [ -n "$JWKS" ] || die "cannot read issuer/JWKS from k3s"
+reg(){ api POST "/trust-domains/$TD/server-groups/$SG/components" "$(jq -nc --arg n "$SERVER" --arg iss "$ISS" --arg sub "$JWT_SUB" --arg aud "$JWT_AUD" --argjson j "$JWKS" \
+    '{name:$n, authentication:{type:"JWT", data:{audience:$aud, issuer:$iss, sub:$sub, public_keys:{type:"jwks", value:$j}}}}')"; }
+unreg(){ api DELETE "/trust-domains/$TD/server-groups/$SG/components/$SERVER"; echo "  delete old component: $CODE"; rm -f "$ST/authn_id" "$ST/jwks.json"; }
+if [ -s "$ST/authn_id" ] && [ "$(cat "$ST/jwks.json" 2>/dev/null)" = "$JWKS" ]; then echo "  already registered (JWKS unchanged)"
+else
+  # k3s signing key changed (volume recreated) or authn_id lost -> re-register; the new authn_id goes to the helm release (20)
+  [ -s "$ST/authn_id" ] && { echo "  k3s JWKS changed -> re-register"; unreg; }
+  reg; [ "$CODE" = 409 ] && { unreg; reg; }
+  ok_or_exists; jq -r .authn_id <<<"$BODY" > "$ST/authn_id"; printf '%s' "$JWKS" > "$ST/jwks.json"
 fi
-if [ ! -s "$ST/authn_id" ]; then
-  api POST "/trust-domains/$TD/server-groups/$SG/components" "$(jq -nc --arg n "$SERVER" --arg iss "$JWT_ISS" --arg sub "$JWT_SUB" --arg aud "$JWT_AUD" --slurpfile j "$ST/signer/jwks.json" \
-    '{name:$n, authentication:{type:"JWT", data:{audience:$aud, issuer:$iss, sub:$sub, public_keys:{type:"jwks", value:$j[0]}}}}')"
-  ok_or_exists; [[ "$CODE" == 2* ]] && jq -r .authn_id <<<"$BODY" > "$ST/authn_id"
-fi
-[ -s "$ST/authn_id" ] || die "no authn_id (component exists but the file is missing? delete the component and rerun)"
+[ -s "$ST/authn_id" ] || die "no authn_id"
 
 echo "[5] Node group $NG (policy: $SA_USER + sha256 swa-go-test  OR  $SA_USER + path swa-agent CLI for the swa-test.sh demo)"
 ensure_client
@@ -45,6 +42,8 @@ api POST "/trust-domains/$TD/server-groups/$SG/node-groups" "$(jq -nc --arg n "$
 ok_or_exists
 if [ "$CODE" = 409 ]; then   # update the policy (new client hash / policy change)
   api PATCH "/trust-domains/$TD/server-groups/$SG/node-groups/$NG" "$(jq -nc --argjson p "$POL" '{workload_configuration:{workload_registration_policies:$p}}')"; echo "  PATCH policy: $CODE"
+  # the server syncs every 15m (chart default); restart it so the new policy applies now
+  kubectl -n "$NS" get deploy swa-server >/dev/null 2>&1 && kubectl -n "$NS" rollout restart deploy/swa-server >/dev/null && echo "  restarted swa-server in $NS"
 fi
 
 echo "[6] Authenticator authn-jwt/$AUTHN (host-in-URL, jwks-uri trust domain $TD)"

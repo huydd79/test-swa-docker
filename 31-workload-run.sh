@@ -37,5 +37,5 @@ YAML
 docker rm -f "$WL" >/dev/null 2>&1 || true
 docker run -d --pull=never --name "$WL" --hostname "$WL" --cap-add SYS_PTRACE -v "$PWD/$D:/etc/swa:Z" "$WL_IMAGE" >/dev/null
 sleep 12
-echo "$WL: $(docker inspect -f '{{.State.Status}}' "$WL"), cert CN=$(openssl x509 -in "$D/x509pop.cert" -noout -subject | sed 's/.*CN = //')"
+echo "$WL: $(docker inspect -f '{{.State.Status}}' "$WL"), cert CN=$(openssl x509 -in "$D/x509pop.cert" -noout -subject | sed 's/.*CN *= *//')"
 docker exec "$WL" sh -c 'ls -l /run/swa-agent/api.sock; grep -E "level=(ERROR|WARN)" /var/log/swa-agent.log | tail -3 | cut -c1-200' || true

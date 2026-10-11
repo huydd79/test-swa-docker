@@ -1,13 +1,13 @@
 #!/bin/bash
-# 99-cleanup.sh [local|tenant|all] - Remove the prod/dev lab. Default: all. Only touches the objects this lab created.
+# 99-cleanup.sh [local|tenant|all] - Remove the prod/dev lab (local = containers, k3s, image; tenant = SWA + Secrets Manager objects). Default: all. Only touches the objects this lab created.
 source "$(dirname "$0")/lib.sh"
 MODE=${1:-all}
 if [[ $MODE == local || $MODE == all ]]; then
-  for e in $ENVS; do env_load $e; docker rm -f "$WL" "$SERVER" >/dev/null 2>&1 || true
-    systemctl disable --now "swa-lab-token@$e.timer" 2>/dev/null || true; done
-  rm -f /etc/systemd/system/swa-lab-token@.{service,timer}; systemctl daemon-reload
+  for e in $ENVS; do env_load $e; docker rm -f "$WL" >/dev/null 2>&1 || true; done
+  docker rm -f "$K3S_NAME" >/dev/null 2>&1 || true; docker volume rm "$K3S_NAME" >/dev/null 2>&1 || true   # k3s + SA signing key
+  rm -f "$KUBECONFIG"; for e in $ENVS; do rm -f "state/$e/jwks.json"; done   # next 10 re-registers with the new k3s JWKS
   docker rmi -f "$WL_IMAGE" >/dev/null 2>&1 || true
-  echo "local: containers, timers and image removed"
+  echo "local: workload containers, k3s container + volume, workload image removed"
 fi
 if [[ $MODE == tenant || $MODE == all ]]; then
   need_conjur
@@ -26,8 +26,8 @@ if [[ $MODE == tenant || $MODE == all ]]; then
     api DELETE "/trust-domains/$TD/server-groups/$SG/components/$SERVER"; echo "  component $SERVER: $CODE"
     api DELETE "/trust-domains/$TD/server-groups/$SG"; echo "  server group $SG: $CODE"
     api DELETE "/trust-domains/$TD"; echo "  trust domain $TD: $CODE"
-    rm -f "$ST/authn_id"
+    rm -f "$ST/authn_id" "$ST/jwks.json"
   done
   left=$(conjur list 2>/dev/null | grep -cE "prod\\.swa\\.$BASE_DOMAIN|dev\\.swa\\.$BASE_DOMAIN|authn-jwt/swa-(prod|dev)" || true); echo "Leftover Secrets Manager objects: $left"
 fi
-[[ $MODE == all ]] && { find state -name '*.key' -exec shred -u {} \; 2>/dev/null; rm -rf state; echo "state/ removed (keys shredded)"; }
+[[ $MODE == all ]] && { find state -name '*.key' -exec sh -c 'shred -u "$1" 2>/dev/null || rm -P "$1"' _ {} \; 2>/dev/null; rm -rf state; echo "state/ removed (keys shredded)"; }
